@@ -1,0 +1,39 @@
+name: Extract FHAM AI
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "FHAM-AI-4.0-FINAL.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project
+        run: |
+          unzip -o FHAM-AI-4.0-FINAL.zip -d extracted
+          cp -r extracted/backend .
+          cp -r extracted/frontend .
+          cp extracted/render.yaml .
+          cp extracted/.env.example .
+          cp extracted/README.md .
+          cp extracted/run.bat .
+          cp extracted/run.sh .
+          rm -rf extracted
+          rm -f FHAM-AI-4.0-FINAL.zip
+
+      - name: Commit extracted project
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Extract FHAM AI project [skip ci]" || exit 0
+          git push
