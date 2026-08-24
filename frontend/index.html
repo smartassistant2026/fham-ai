@@ -1,0 +1,47 @@
+<!doctype html><html lang="fa" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FHAM AI — پیچیده را ساده بفهم</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f5f7fb;color:#182230}
+header{background:#101828;color:white;padding:18px 5%;display:flex;justify-content:space-between;align-items:center;gap:15px}
+.brand{font-size:22px;font-weight:800}.tag{opacity:.8;font-size:13px}.lang{padding:9px;border-radius:9px;border:0}
+main{max-width:1000px;margin:25px auto;padding:0 15px}.hero{padding:25px 0}.hero h1{margin:0 0 8px;font-size:34px}.hero p{color:#667085}
+.card{background:white;border:1px solid #e4e7ec;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 5px 20px #1018280b}
+textarea{width:100%;min-height:120px;border:1px solid #d0d5dd;border-radius:14px;padding:14px;font-size:16px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}button,select{border:0;border-radius:11px;padding:11px 16px;cursor:pointer;font-weight:700}
+.primary{background:#111827;color:#fff}.soft{background:#eef2f6}.danger{background:#fee4e2;color:#b42318}
+.mode{display:flex;gap:7px;flex-wrap:wrap}.mode button.active{outline:2px solid #111827}
+.msg{padding:14px;border-radius:14px;margin:10px 0;white-space:pre-wrap;line-height:1.9}.user{background:#eef4ff}.ai{background:#f7f7f8}
+.small{font-size:12px;color:#667085}.hidden{display:none}.history{max-height:330px;overflow:auto}
+@media(max-width:600px){.hero h1{font-size:26px}header{padding:15px}.brand{font-size:18px}}
+</style></head><body>
+<header><div><div class="brand">🧠 FHAM AI</div><div class="tag">پیچیده را ساده بفهم</div></div>
+<select id="lang" class="lang" onchange="changeLang()"><option value="fa">دری / فارسی</option><option value="ps">پښتو</option><option value="en">English</option></select></header>
+<main><section class="hero"><h1>هر سؤال داری، بپرس.</h1><p>یک دستیار هوشمند برای یادگیری، تحقیق، تحلیل و حل مسئله.</p></section>
+<section class="card"><div class="mode" id="modes">
+<button class="soft active" data-mode="professional">🎓 حرفه‌ای</button>
+<button class="soft" data-mode="simple">🌱 ساده</button>
+<button class="soft" data-mode="deep">🔬 عمیق</button>
+<button class="soft" data-mode="study">📚 آموزشی</button></div>
+<textarea id="input" placeholder="سؤال یا درخواست خود را اینجا بنویس..."></textarea>
+<div class="row"><button class="primary" onclick="send()">ارسال سؤال ↗</button><button class="soft" onclick="clearChat()">پاک‌کردن گفتگو</button><button class="soft" onclick="loadHistory()">تاریخچه</button></div>
+<div id="status" class="small"></div></section>
+<section id="chat" class="card"></section>
+<section id="historyBox" class="card hidden"><h3>📜 تاریخچه</h3><div id="history" class="history"></div></section>
+<section class="card"><h3>🔐 وضعیت سیستم</h3><div id="health" class="small">در حال بررسی...</div><p class="small">کلید AI باید فقط روی Backend باشد و هرگز در Frontend قرار نگیرد.</p></section>
+</main>
+<script>
+const API_BASE=window.FHAM_API_BASE||location.origin;
+const uid=localStorage.getItem("fham_uid")||crypto.randomUUID();localStorage.setItem("fham_uid",uid);
+let mode="professional";
+document.querySelectorAll("#modes button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#modes button").forEach(x=>x.classList.remove("active"));b.classList.add("active");mode=b.dataset.mode});
+function add(role,text){const d=document.createElement("div");d.className="msg "+(role==="user"?"user":"ai");d.textContent=text;document.getElementById("chat").appendChild(d);d.scrollIntoView({behavior:"smooth"})}
+async function send(){const el=document.getElementById("input"),m=el.value.trim();if(!m)return;add("user",m);el.value="";document.getElementById("status").textContent="⏳ در حال پاسخ‌گویی...";
+try{const r=await fetch(API_BASE+"/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user_id:uid,message:m,language:document.getElementById("lang").value,mode})});const d=await r.json();add("assistant",d.answer);document.getElementById("status").textContent=d.demo?"حالت Demo":"AI فعال"}catch(e){add("assistant","اتصال به Backend برقرار نشد. ابتدا Backend را اجرا کنید.");document.getElementById("status").textContent="خطای اتصال"}}
+async function loadHistory(){const b=document.getElementById("historyBox");b.classList.remove("hidden");try{const r=await fetch(API_BASE+"/api/history/"+uid),d=await r.json();document.getElementById("history").innerHTML="";d.forEach(x=>addHistory(x.role,x.content))}catch(e){document.getElementById("history").textContent="خطا در دریافت تاریخچه"}}
+function addHistory(role,text){const d=document.createElement("div");d.className="msg "+(role==="user"?"user":"ai");d.textContent=text;document.getElementById("history").appendChild(d)}
+function clearChat(){document.getElementById("chat").innerHTML=""}
+function changeLang(){document.documentElement.lang=document.getElementById("lang").value}
+async function health(){try{const r=await fetch(API_BASE+"/api/health"),d=await r.json();document.getElementById("health").textContent=d.ok?"Backend فعال — "+(d.ai_configured?"AI فعال است":"AI Key تنظیم نشده؛ Demo Mode"):"Backend مشکل دارد"}catch(e){document.getElementById("health").textContent="Backend در دسترس نیست"}}
+document.getElementById("input").addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter")send()});health();
+</script></body></html>
