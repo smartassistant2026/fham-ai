@@ -1,6 +1,9 @@
 import os, sqlite3, json, re
+import logging
 from datetime import datetime
 from typing import Optional
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("fham-ai")
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -101,7 +104,10 @@ def chat(req:ChatRequest):
             answer=demo_answer(req.message,req.language,req.mode)["answer"]+"\n\nخطا در اتصال به سرویس AI؛ تنظیمات Backend را بررسی کنید."
             demo=True
     else:
-        answer=demo_answer(req.message,req.language,req.mode)["answer"]; demo=True
+        except Exception:
+    logger.exception("OpenAI request failed")
+    answer=demo_answer(req.message,req.language,req.mode)["answer"]+"\n\nخطا در اتصال به سرویس AI؛ تنظیمات Backend را بررسی کنید."
+    demo=True
     now=datetime.utcnow().isoformat()
     c.execute("INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",(req.user_id,"user",req.message,now))
     c.execute("INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",(req.user_id,"assistant",answer,datetime.utcnow().isoformat()))
