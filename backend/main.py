@@ -91,27 +91,67 @@ def history(user_id:str):
     c.close()
     return [dict(x) for x in reversed(rows)]
 
-@app.post("/api/chat")
-def chat(req:ChatRequest):
-    c=conn()
-    rows=c.execute("SELECT role,content FROM chats WHERE user_id=? ORDER BY id DESC LIMIT 10",(req.user_id,)).fetchall()
-    history=list(reversed(rows))
+@@app.post("/api/chat")
+def chat(req: ChatRequest):
+    c = conn()
+
+    rows = c.execute(
+        "SELECT role,content FROM chats WHERE user_id=? ORDER BY id DESC LIMIT 10",
+        (req.user_id,)
+    ).fetchall()
+
+    history = list(reversed(rows))
+
     if OPENAI_API_KEY:
         try:
-            answer=ai_answer(req.message,req.language,req.mode,history)
-            demo=False
-        except Exception as e:
-            answer=demo_answer(req.message,req.language,req.mode)["answer"]+"\n\nخطا در اتصال به سرویس AI؛ تنظیمات Backend را بررسی کنید."
-            demo=True
-    else:
+            answer = ai_answer(
+                req.message,
+                req.language,
+                req.mode,
+                history
+            )
+            demo = False
+
         except Exception:
-    logger.exception("OpenAI request failed")
-    answer=demo_answer(req.message,req.language,req.mode)["answer"]+"\n\nخطا در اتصال به سرویس AI؛ تنظیمات Backend را بررسی کنید."
-    demo=True
-    now=datetime.utcnow().isoformat()
-    c.execute("INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",(req.user_id,"user",req.message,now))
-    c.execute("INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",(req.user_id,"assistant",answer,datetime.utcnow().isoformat()))
-    c.commit(); c.close()
-    return {"answer":answer,"mode":req.mode,"demo":demo}
+            logger.exception("OpenAI request failed")
+            answer = (
+                demo_answer(
+                    req.message,
+                    req.language,
+                    req.mode
+                )["answer"]
+                + "\n\nخطا در اتصال به سرویس AI؛ تنظیمات Backend را بررسی کنید."
+            )
+            demo = True
+
+    else:
+        logger.error("OPENAI_API_KEY is not configured")
+        answer = demo_answer(
+            req.message,
+            req.language,
+            req.mode
+        )["answer"]
+        demo = True
+
+    now = datetime.utcnow().isoformat()
+
+    c.execute(
+        "INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",
+        (req.user_id, "user", req.message, now)
+    )
+
+    c.execute(
+        "INSERT INTO chats(user_id,role,content,created_at) VALUES(?,?,?,?)",
+        (req.user_id, "assistant", answer, datetime.utcnow().isoformat())
+    )
+
+    c.commit()
+    c.close()
+
+    return {
+        "answer": answer,
+        "mode": req.mode,
+        "demo": demo
+    }
 
 app.mount("/",StaticFiles(directory=os.path.join(os.path.dirname(APP_DIR),"frontend"),html=True),name="frontend")
