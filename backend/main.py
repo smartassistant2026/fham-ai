@@ -91,7 +91,7 @@ def history(user_id:str):
     c.close()
     return [dict(x) for x in reversed(rows)]
 
-@@app.post("/api/chat")
+@app.post("/api/chat")
 def chat(req: ChatRequest):
     c = conn()
 
