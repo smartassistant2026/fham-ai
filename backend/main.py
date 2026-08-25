@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,15 +10,19 @@ from pydantic import BaseModel, Field
 
 
 # =========================================================
-# Logging
+# LOGGING
 # =========================================================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
 logger = logging.getLogger("fham-ai")
 
 
 # =========================================================
-# Environment
+# ENVIRONMENT
 # =========================================================
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,14 +32,14 @@ DB_PATH = os.getenv(
     os.path.join(APP_DIR, "fham.db")
 )
 
-OPENAI_API_KEY = os.getenv(
-    "OPENAI_API_KEY",
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY",
     ""
 ).strip()
 
-OPENAI_MODEL = os.getenv(
-    "OPENAI_MODEL",
-    "gpt-4o-mini"
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile"
 ).strip()
 
 FRONTEND_ORIGIN = os.getenv(
@@ -45,13 +49,19 @@ FRONTEND_ORIGIN = os.getenv(
 
 
 # =========================================================
-# FastAPI
+# APPLICATION
 # =========================================================
 
 app = FastAPI(
     title="FHAM AI",
-    version="4.0.0"
+    description="FHAM AI educational and general-purpose assistant",
+    version="5.0.0"
 )
+
+
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,21 +77,25 @@ app.add_middleware(
 
 
 # =========================================================
-# Database
+# DATABASE
 # =========================================================
 
 def conn():
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(
+        DB_PATH,
+        timeout=30
+    )
+
     connection.row_factory = sqlite3.Row
 
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS chats(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            role TEXT,
-            content TEXT,
-            created_at TEXT
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -102,7 +116,7 @@ def conn():
 
 
 # =========================================================
-# Request Models
+# REQUEST MODELS
 # =========================================================
 
 class ChatRequest(BaseModel):
@@ -140,58 +154,83 @@ class ProfileRequest(BaseModel):
 
 
 # =========================================================
-# Demo Response
+# TIME
 # =========================================================
 
-def demo_answer(message, language, mode):
+def utc_now():
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+# =========================================================
+# DEMO RESPONSE
+# =========================================================
+
+def demo_answer(
+    message,
+    language,
+    mode,
+    reason="AI service is unavailable."
+):
 
     if language == "en":
+
         text = (
             f'I received your request: "{message}".\n\n'
-            "FHAM AI could not connect to the AI service. "
-            "Please check the backend configuration."
+            "FHAM AI could not generate a live AI response "
+            "because the AI service is currently unavailable."
         )
 
     elif language == "ps":
+
         text = (
             f'ستاسې غوښتنه ترلاسه شوه: «{message}».\n\n'
-            "FHAM AI د AI خدمت سره وصل نه شو. "
-            "مهرباني وکړئ د Backend تنظیمات وګورئ."
+            "FHAM AI اوس مهال د AI خدمت څخه ریښتینی ځواب "
+            "نه شي ترلاسه کولی."
         )
 
     else:
+
         text = (
             f'درخواست شما دریافت شد: «{message}».\n\n'
-            "FHAM AI نتوانست به سرویس هوش مصنوعی متصل شود. "
-            "لطفاً تنظیمات Backend را بررسی کنید."
+            "FHAM AI در حال حاضر نتوانست پاسخ واقعی "
+            "هوش مصنوعی را دریافت کند."
         )
 
     return {
         "answer": text,
         "mode": mode,
-        "demo": True
+        "demo": True,
+        "reason": reason
     }
 
 
 # =========================================================
-# OpenAI AI Response
+# GROQ AI
 # =========================================================
 
-def ai_answer(message, language, mode, history):
+def ai_answer(
+    message,
+    language,
+    mode,
+    history
+):
 
-    if not OPENAI_API_KEY:
+    if not GROQ_API_KEY:
+
         logger.error(
-            "OPENAI_API_KEY is not configured."
+            "GROQ_API_KEY is not configured."
         )
 
         raise RuntimeError(
-            "OPENAI_API_KEY is not configured"
+            "GROQ_API_KEY is not configured"
         )
 
-    from openai import OpenAI
+    from groq import Groq
 
-    client = OpenAI(
-        api_key=OPENAI_API_KEY
+    client = Groq(
+        api_key=GROQ_API_KEY
     )
 
     language_name = {
@@ -204,52 +243,71 @@ def ai_answer(message, language, mode, history):
     )
 
     system_prompt = f"""
-You are FHAM AI, a professional educational
-and general-purpose AI assistant.
+You are FHAM AI, a professional, helpful,
+educational and general-purpose AI assistant.
 
 Answer in {language_name}.
 
-Be accurate, clear, structured, useful,
-and honest about uncertainty.
+Your responsibilities:
 
-Do not invent facts, citations, sources,
-credentials, or personal experiences.
+1. Give accurate and useful answers.
+2. Explain difficult subjects clearly.
+3. Use structured responses when appropriate.
+4. For educational questions, teach step-by-step.
+5. Give examples when they improve understanding.
+6. Never invent facts, sources, citations,
+   credentials or personal experiences.
+7. If you are uncertain, say so clearly.
+8. Do not claim that you accessed the internet
+   unless a web-search tool was actually used.
+9. For current information, explain that
+   live verification may be required.
+10. Be respectful and professional.
+11. When relevant, consider the user's
+    Afghanistan/Dari/Pashto context.
 
-If information may have changed recently,
-clearly explain that current verification
-may be required.
-
-Mode: {mode}.
-
-When teaching something, explain it
-step-by-step and provide examples.
-
-Use clear language and Afghanistan-relevant
-context when it is useful.
+Current response mode:
+{mode}
 """
 
-    input_messages = [
+    messages = [
         {
             "role": "system",
             "content": system_prompt
         }
     ]
 
+    # -----------------------------------------------------
+    # Conversation history
+    # -----------------------------------------------------
+
     for item in history[-10:]:
 
         role = item["role"]
 
-        if role not in ["user", "assistant"]:
+        if role not in (
+            "user",
+            "assistant"
+        ):
             continue
 
-        input_messages.append(
+        content = item["content"]
+
+        if not content:
+            continue
+
+        messages.append(
             {
                 "role": role,
-                "content": item["content"]
+                "content": content
             }
         )
 
-    input_messages.append(
+    # -----------------------------------------------------
+    # Current message
+    # -----------------------------------------------------
+
+    messages.append(
         {
             "role": "user",
             "content": message
@@ -257,50 +315,63 @@ context when it is useful.
     )
 
     logger.info(
-        "Sending request to OpenAI. Model=%s",
-        OPENAI_MODEL
+        "Sending request to Groq. model=%s",
+        GROQ_MODEL
     )
 
     try:
 
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            input=input_messages
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.25,
+            max_tokens=2048
         )
 
     except Exception:
 
         logger.exception(
-            "OpenAI API request failed."
+            "Groq API request failed."
         )
 
         raise
 
-    answer = getattr(
-        response,
-        "output_text",
-        None
+    if not completion.choices:
+
+        logger.error(
+            "Groq returned no choices."
+        )
+
+        raise RuntimeError(
+            "Groq returned no choices"
+        )
+
+    answer = (
+        completion
+        .choices[0]
+        .message
+        .content
     )
 
     if not answer:
 
         logger.error(
-            "OpenAI returned an empty response."
+            "Groq returned an empty response."
         )
 
         raise RuntimeError(
-            "OpenAI returned an empty response"
+            "Groq returned an empty response"
         )
 
     logger.info(
-        "OpenAI response received successfully."
+        "Groq response received successfully."
     )
 
     return answer
 
 
 # =========================================================
-# Health Check
+# HEALTH
 # =========================================================
 
 @app.get("/api/health")
@@ -309,16 +380,15 @@ def health():
     return {
         "ok": True,
         "service": "FHAM AI",
-        "version": "4.0.0",
-        "ai_configured": bool(
-            OPENAI_API_KEY
-        ),
-        "model": OPENAI_MODEL
+        "version": "5.0.0",
+        "provider": "groq",
+        "ai_configured": bool(GROQ_API_KEY),
+        "model": GROQ_MODEL
     }
 
 
 # =========================================================
-# Profile
+# PROFILE GET
 # =========================================================
 
 @app.get("/api/profile/{user_id}")
@@ -328,13 +398,15 @@ def profile(user_id: str):
 
     connection.execute(
         """
-        INSERT OR IGNORE INTO profiles(user_id)
+        INSERT OR IGNORE INTO profiles(
+            user_id
+        )
         VALUES(?)
         """,
         (user_id,)
     )
 
-    profile_row = connection.execute(
+    row = connection.execute(
         """
         SELECT *
         FROM profiles
@@ -346,8 +418,12 @@ def profile(user_id: str):
     connection.commit()
     connection.close()
 
-    return dict(profile_row)
+    return dict(row)
 
+
+# =========================================================
+# PROFILE UPDATE
+# =========================================================
 
 @app.post("/api/profile/{user_id}")
 def update_profile(
@@ -359,7 +435,9 @@ def update_profile(
 
     connection.execute(
         """
-        INSERT OR IGNORE INTO profiles(user_id)
+        INSERT OR IGNORE INTO profiles(
+            user_id
+        )
         VALUES(?)
         """,
         (user_id,)
@@ -368,7 +446,8 @@ def update_profile(
     connection.execute(
         """
         UPDATE profiles
-        SET display_name=?,
+        SET
+            display_name=?,
             language=?
         WHERE user_id=?
         """,
@@ -381,7 +460,7 @@ def update_profile(
 
     connection.commit()
 
-    profile_row = connection.execute(
+    row = connection.execute(
         """
         SELECT *
         FROM profiles
@@ -392,11 +471,11 @@ def update_profile(
 
     connection.close()
 
-    return dict(profile_row)
+    return dict(row)
 
 
 # =========================================================
-# Chat History
+# CHAT HISTORY
 # =========================================================
 
 @app.get("/api/history/{user_id}")
@@ -406,7 +485,10 @@ def history(user_id: str):
 
     rows = connection.execute(
         """
-        SELECT role, content, created_at
+        SELECT
+            role,
+            content,
+            created_at
         FROM chats
         WHERE user_id=?
         ORDER BY id DESC
@@ -424,7 +506,7 @@ def history(user_id: str):
 
 
 # =========================================================
-# Chat
+# CHAT
 # =========================================================
 
 @app.post("/api/chat")
@@ -432,136 +514,137 @@ def chat(req: ChatRequest):
 
     connection = conn()
 
-    rows = connection.execute(
-        """
-        SELECT role, content
-        FROM chats
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 10
-        """,
-        (req.user_id,)
-    ).fetchall()
+    try:
 
-    history_rows = list(
-        reversed(rows)
-    )
+        rows = connection.execute(
+            """
+            SELECT
+                role,
+                content
+            FROM chats
+            WHERE user_id=?
+            ORDER BY id DESC
+            LIMIT 10
+            """,
+            (req.user_id,)
+        ).fetchall()
 
-    # -----------------------------------------------------
-    # Try real AI
-    # -----------------------------------------------------
+        history_rows = list(
+            reversed(rows)
+        )
 
-    if OPENAI_API_KEY:
+        # -------------------------------------------------
+        # AI
+        # -------------------------------------------------
 
         try:
 
             answer = ai_answer(
-                req.message,
-                req.language,
-                req.mode,
-                history_rows
+                message=req.message,
+                language=req.language,
+                mode=req.mode,
+                history=history_rows
             )
 
             demo = False
+            reason = None
 
         except Exception as error:
 
             logger.exception(
-                "OpenAI request failed: %s",
+                "AI request failed: %s",
                 error
             )
 
-            answer = (
-                demo_answer(
-                    req.message,
-                    req.language,
-                    req.mode
-                )["answer"]
-                +
-                "\n\n"
-                +
-                "خطا در اتصال به سرویس AI. "
-                "جزئیات خطا در Application Logs ثبت شده است."
+            fallback = demo_answer(
+                req.message,
+                req.language,
+                req.mode,
+                reason=str(error)
             )
 
+            answer = fallback["answer"]
             demo = True
+            reason = str(error)
 
-    else:
+        # -------------------------------------------------
+        # Save user message
+        # -------------------------------------------------
 
-        logger.error(
-            "OPENAI_API_KEY is missing."
+        connection.execute(
+            """
+            INSERT INTO chats(
+                user_id,
+                role,
+                content,
+                created_at
+            )
+            VALUES(?,?,?,?)
+            """,
+            (
+                req.user_id,
+                "user",
+                req.message,
+                utc_now()
+            )
         )
 
-        answer = demo_answer(
-            req.message,
-            req.language,
-            req.mode
-        )["answer"]
+        # -------------------------------------------------
+        # Save assistant message
+        # -------------------------------------------------
 
-        demo = True
-
-    # -----------------------------------------------------
-    # Save conversation
-    # -----------------------------------------------------
-
-    now = datetime.utcnow().isoformat()
-
-    connection.execute(
-        """
-        INSERT INTO chats(
-            user_id,
-            role,
-            content,
-            created_at
+        connection.execute(
+            """
+            INSERT INTO chats(
+                user_id,
+                role,
+                content,
+                created_at
+            )
+            VALUES(?,?,?,?)
+            """,
+            (
+                req.user_id,
+                "assistant",
+                answer,
+                utc_now()
+            )
         )
-        VALUES(?,?,?,?)
-        """,
-        (
-            req.user_id,
-            "user",
-            req.message,
-            now
-        )
-    )
 
-    connection.execute(
-        """
-        INSERT INTO chats(
-            user_id,
-            role,
-            content,
-            created_at
-        )
-        VALUES(?,?,?,?)
-        """,
-        (
-            req.user_id,
-            "assistant",
-            answer,
-            datetime.utcnow().isoformat()
-        )
-    )
+        connection.commit()
 
-    connection.commit()
-    connection.close()
+        return {
+            "answer": answer,
+            "mode": req.mode,
+            "demo": demo,
+            "provider": "groq",
+            "model": GROQ_MODEL,
+            "error": reason
+        }
 
-    return {
-        "answer": answer,
-        "mode": req.mode,
-        "demo": demo
-    }
+    finally:
+
+        connection.close()
 
 
 # =========================================================
-# Frontend
+# FRONTEND
 # =========================================================
 
-frontend_directory = os.path.join(
-    os.path.dirname(APP_DIR),
-    "frontend"
+frontend_directory = os.path.abspath(
+    os.path.join(
+        APP_DIR,
+        "..",
+        "frontend"
+    )
 )
 
 if os.path.isdir(frontend_directory):
+
+    logger.info(
+        "Frontend found: %s",
+        frontend_directory
+    )
 
     app.mount(
         "/",
