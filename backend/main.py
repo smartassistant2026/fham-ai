@@ -48,22 +48,71 @@ def demo_answer(message, language, mode):
                 "mode":mode,"demo":True}
     return {"answer":f"درخواست شما دریافت شد: «{message}».\n\nFHAM AI در حال حاضر در حالت Demo اجرا می‌شود. برای پاسخ‌های واقعی هوش مصنوعی، باید OPENAI_API_KEY فقط در Backend تنظیم شود.",
             "mode":mode,"demo":True}
-
-def ai_answer(message, language, mode, history):
+  def ai_answer(message, language, mode, history):
     from openai import OpenAI
-    client=OpenAI(api_key=OPENAI_API_KEY)
-    lang={"fa":"دری/فارسی","ps":"پشتو","en":"English"}.get(language,"دری/فارسی")
-    system=f"""You are FHAM AI, a careful educational and general-purpose assistant.
-Answer in {lang}. Be accurate, structured, practical, and honest about uncertainty.
-Do not invent facts, citations, sources, or credentials. For current information, say when live verification is needed.
-Mode: {mode}. If the user asks for teaching, explain step-by-step with examples.
-The user may be from Afghanistan; use clear language and local context when relevant."""
-    messages=[{"role":"system","content":system}]
-    messages += [{"role":r["role"],"content":r["content"]} for r in history[-10:]]
-    messages.append({"role":"user","content":message})
-    resp=client.chat.completions.create(model=OPENAI_MODEL,messages=messages,temperature=0.25)
-    return resp.choices[0].message.content
 
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    lang = {
+        "fa": "Dari/Persian",
+        "ps": "Pashto",
+        "en": "English"
+    }.get(language, "Dari/Persian")
+
+    system = f"""
+You are FHAM AI, a careful educational and general-purpose AI assistant.
+
+Answer in {lang}.
+
+Be accurate, structured, practical, and honest about uncertainty.
+Do not invent facts, citations, sources, or credentials.
+For current information, clearly state when live verification is needed.
+
+Response mode: {mode}.
+
+If the user asks for teaching, explain step-by-step and provide examples.
+Use clear language and local context when relevant.
+"""
+
+    messages = [
+        {
+            "role": "system",
+            "content": system
+        }
+    ]
+
+    for item in history[-10:]:
+        messages.append({
+            "role": item["role"],
+            "content": item["content"]
+        })
+
+    messages.append({
+        "role": "user",
+        "content": message
+    })
+
+    logger.info(
+        "Sending request to OpenAI: model=%s",
+        OPENAI_MODEL
+    )
+
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        input=messages
+    )
+
+    answer = response.output_text
+
+    if not answer:
+        raise RuntimeError("OpenAI returned an empty response")
+
+    logger.info("OpenAI response received successfully")
+
+    return answer
 @app.get("/api/health")
 def health():
     return {"ok":True,"service":"FHAM AI","version":"4.0.0","ai_configured":bool(OPENAI_API_KEY)}
