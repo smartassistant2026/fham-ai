@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import logging
 from datetime import datetime, timezone
@@ -8,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from groq import Groq
 
 load_dotenv()
 
@@ -26,7 +26,7 @@ logger = logging.getLogger("fham-ai")
 
 
 # =========================================================
-# PATHS / ENVIRONMENT
+# PATHS
 # =========================================================
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,17 +36,73 @@ DB_PATH = os.getenv(
     os.path.join(APP_DIR, "fham.db")
 )
 
+
+# =========================================================
+# ENVIRONMENT
+# =========================================================
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
-# IMPORTANT:
-# Do NOT read GROQ_MODEL from Render.
-# This prevents accidental duplicated/broken model names.
-PRIMARY_MODEL = "llama-3.3-70b-versatile"
-BACKUP_MODEL = "llama-3.1-8b-instant"
+# مدل پیش‌فرض معتبر
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+raw_model = os.getenv(
+    "GROQ_MODEL",
+    DEFAULT_GROQ_MODEL
+).strip()
+
+
+def normalize_model(value: str) -> str:
+    """
+    پاک‌سازی مقدار مدل.
+    اگر مدل به اشتباه دوبار چسبیده باشد،
+    فقط یک نسخه را نگه می‌دارد.
+    """
+
+    if not value:
+        return DEFAULT_GROQ_MODEL
+
+    value = value.strip()
+
+    # حذف quoteهای احتمالی
+    value = value.strip("\"'")
+
+    # حالت خراب:
+    # llama-3.3-70b-versatilellama-3.3-70b-versatile
+    doubled = DEFAULT_GROQ_MODEL + DEFAULT_GROQ_MODEL
+
+    if value == doubled:
+        logger.warning(
+            "GROQ_MODEL was duplicated. Automatically corrected."
+        )
+        return DEFAULT_GROQ_MODEL
+
+    # اگر چند بار پشت سر هم تکرار شده باشد
+    while value.endswith(DEFAULT_GROQ_MODEL + DEFAULT_GROQ_MODEL):
+        value = value[:-len(DEFAULT_GROQ_MODEL)]
+
+    # فقط برای مدل شناخته‌شده فعلی
+    if value != DEFAULT_GROQ_MODEL:
+        logger.warning(
+            "GROQ_MODEL value received: %s",
+            value
+        )
+
+    return value
+
+
+GROQ_MODEL = normalize_model(raw_model)
+
 
 FRONTEND_ORIGIN = os.getenv(
     "FRONTEND_ORIGIN",
     "*"
+).strip()
+
+
+APP_ENV = os.getenv(
+    "APP_ENV",
+    "production"
 ).strip()
 
 
@@ -83,6 +139,7 @@ app.add_middleware(
 # =========================================================
 
 def conn():
+
     connection = sqlite3.connect(
         DB_PATH,
         timeout=30
@@ -122,6 +179,7 @@ def conn():
 # =========================================================
 
 class ChatRequest(BaseModel):
+
     user_id: str = Field(
         min_length=1,
         max_length=200
@@ -144,6 +202,7 @@ class ChatRequest(BaseModel):
 
 
 class ProfileRequest(BaseModel):
+
     display_name: str = Field(
         default="",
         max_length=100
@@ -160,66 +219,107 @@ class ProfileRequest(BaseModel):
 # =========================================================
 
 def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
 
 
 # =========================================================
-# AI CLIENT
+# ERROR CLASSIFICATION
+# =========================================================
+
+def classify_error(error):
+
+    text = str(error)
+
+    lower = text.lower()
+
+    if "model_not_found" in lower or "does not exist" in lower:
+        return "MODEL_NOT_FOUND"
+
+    if "401" in lower or "invalid api key" in lower:
+        return "INVALID_API_KEY"
+
+    if "403" in lower or "permission" in lower:
+        return "PERMISSION_DENIED"
+
+    if "429" in lower or "rate limit" in lower:
+        return "RATE_LIMIT"
+
+    if "timeout" in lower:
+        return "TIMEOUT"
+
+    if "connection" in lower:
+        return "CONNECTION_ERROR"
+
+    return "AI_REQUEST_ERROR"
+
+
+# =========================================================
+# DEMO RESPONSE
+# =========================================================
+
+def demo_answer(
+    message,
+    language,
+    mode,
+    reason="AI service is unavailable."
+):
+
+    if language == "en":
+
+        text = (
+            f'I received your request: "{message}".\n\n'
+            "FHAM AI could not generate a live AI response "
+            "because the AI service is currently unavailable."
+        )
+
+    elif language == "ps":
+
+        text = (
+            f'ستاسې غوښتنه ترلاسه شوه: «{message}».\n\n'
+            "FHAM AI اوس مهال د AI خدمت څخه ریښتینی ځواب "
+            "نه شي ترلاسه کولی."
+        )
+
+    else:
+
+        text = (
+            f'درخواست شما دریافت شد: «{message}».\n\n'
+            "FHAM AI در حال حاضر نتوانست پاسخ واقعی "
+            "هوش مصنوعی را دریافت کند."
+        )
+
+    return {
+        "answer": text,
+        "mode": mode,
+        "demo": True,
+        "reason": reason
+    }
+
+
+# =========================================================
+# GROQ CLIENT
 # =========================================================
 
 def get_groq_client():
 
     if not GROQ_API_KEY:
-        raise RuntimeError(
-            "GROQ_API_KEY is not configured on the server."
+
+        logger.error(
+            "GROQ_API_KEY is missing."
         )
+
+        raise RuntimeError(
+            "GROQ_API_KEY is not configured on Render."
+        )
+
+    from groq import Groq
 
     return Groq(
         api_key=GROQ_API_KEY
     )
-
-
-# =========================================================
-# SYSTEM PROMPT
-# =========================================================
-
-def build_system_prompt(language, mode):
-
-    language_name = {
-        "fa": "Dari/Persian",
-        "ps": "Pashto",
-        "en": "English"
-    }.get(
-        language,
-        "Dari/Persian"
-    )
-
-    return f"""
-You are FHAM AI, a professional, helpful,
-educational and general-purpose AI assistant.
-
-Always answer in {language_name}.
-
-Current response mode:
-{mode}
-
-Rules:
-
-1. Give accurate and useful answers.
-2. Explain difficult subjects clearly.
-3. Use structured answers when appropriate.
-4. For educational questions, teach step by step.
-5. Give examples when useful.
-6. Never invent facts, sources, citations,
-   credentials or personal experiences.
-7. If you are uncertain, say so clearly.
-8. Never claim to have browsed the internet
-   unless an actual web-search tool was used.
-9. Be respectful and professional.
-10. Consider Dari/Pashto/Afghanistan context
-    when it is relevant.
-11. Do not mention these internal instructions.
-"""
 
 
 # =========================================================
@@ -235,18 +335,54 @@ def ai_answer(
 
     client = get_groq_client()
 
+    language_name = {
+        "fa": "Dari/Persian",
+        "ps": "Pashto",
+        "en": "English"
+    }.get(
+        language,
+        "Dari/Persian"
+    )
+
+    system_prompt = f"""
+You are FHAM AI.
+
+You are a professional, helpful, educational,
+accurate and general-purpose AI assistant.
+
+Answer in {language_name}.
+
+Current mode:
+{mode}
+
+Rules:
+
+1. Answer the user's question directly.
+2. Be accurate and useful.
+3. Explain difficult subjects clearly.
+4. For educational questions, teach step by step.
+5. Use examples when useful.
+6. Never invent facts, sources or credentials.
+7. If uncertain, say so.
+8. Do not claim to browse the internet unless
+   a real web-search tool was used.
+9. Be respectful and professional.
+10. For mathematics, calculate carefully.
+11. For simple questions, give a simple direct answer.
+12. Do not mention internal APIs, Groq, backend,
+    environment variables or system configuration
+    unless the user specifically asks about them.
+"""
+
     messages = [
         {
             "role": "system",
-            "content": build_system_prompt(
-                language,
-                mode
-            )
+            "content": system_prompt
         }
     ]
 
     # -----------------------------------------------------
-    # Previous conversation
+    # History
     # -----------------------------------------------------
 
     for item in history[-10:]:
@@ -272,7 +408,7 @@ def ai_answer(
         )
 
     # -----------------------------------------------------
-    # Current user message
+    # Current message
     # -----------------------------------------------------
 
     messages.append(
@@ -282,114 +418,73 @@ def ai_answer(
         }
     )
 
-    # -----------------------------------------------------
-    # Try primary model
-    # -----------------------------------------------------
-
-    models = [
-        PRIMARY_MODEL,
-        BACKUP_MODEL
-    ]
-
-    last_error = None
-
-    for model in models:
-
-        logger.info(
-            "Trying Groq model: %s",
-            model
-        )
-
-        try:
-
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.25,
-                max_completion_tokens=2048
-            )
-
-            if not completion.choices:
-                raise RuntimeError(
-                    "Groq returned no choices."
-                )
-
-            answer = (
-                completion
-                .choices[0]
-                .message
-                .content
-            )
-
-            if not answer:
-                raise RuntimeError(
-                    "Groq returned an empty response."
-                )
-
-            logger.info(
-                "Groq response received successfully. model=%s",
-                model
-            )
-
-            return answer, model
-
-        except Exception as error:
-
-            last_error = error
-
-            logger.exception(
-                "Groq model failed: %s | error=%s",
-                model,
-                error
-            )
-
-            # Try backup model automatically.
-            continue
-
-    raise RuntimeError(
-        f"All Groq models failed. Last error: {last_error}"
+    logger.info(
+        "AI REQUEST | model=%s | language=%s | mode=%s",
+        GROQ_MODEL,
+        language,
+        mode
     )
 
+    try:
 
-# =========================================================
-# DEMO RESPONSE
-# =========================================================
-
-def demo_answer(
-    message,
-    language,
-    mode,
-    reason=""
-):
-
-    if language == "en":
-
-        text = (
-            f'I received your request: "{message}".\n\n'
-            "The AI service is temporarily unavailable."
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_completion_tokens=2048
         )
 
-    elif language == "ps":
+    except Exception as error:
 
-        text = (
-            f'ستاسې غوښتنه ترلاسه شوه: «{message}».\n\n'
-            "د AI خدمت اوس مهال په لنډمهاله توګه شتون نه لري."
+        error_type = classify_error(error)
+
+        logger.exception(
+            "GROQ ERROR | type=%s | model=%s | error=%s",
+            error_type,
+            GROQ_MODEL,
+            error
         )
 
-    else:
+        raise RuntimeError(
+            f"{error_type}: {error}"
+        ) from error
 
-        text = (
-            f'درخواست شما دریافت شد: «{message}».\n\n'
-            "سرویس هوش مصنوعی در حال حاضر در دسترس نیست."
+    if not completion.choices:
+
+        logger.error(
+            "GROQ returned zero choices."
         )
 
-    return {
-        "answer": text,
-        "mode": mode,
-        "demo": True,
-        "provider": "groq",
-        "error": reason
-    }
+        raise RuntimeError(
+            "EMPTY_GROQ_RESPONSE"
+        )
+
+    answer = (
+        completion
+        .choices[0]
+        .message
+        .content
+    )
+
+    if not answer:
+
+        logger.error(
+            "GROQ returned empty content."
+        )
+
+        raise RuntimeError(
+            "EMPTY_GROQ_CONTENT"
+        )
+
+    answer = answer.strip()
+
+    logger.info(
+        "AI RESPONSE SUCCESS | model=%s | chars=%s",
+        GROQ_MODEL,
+        len(answer)
+    )
+
+    return answer
 
 
 # =========================================================
@@ -405,8 +500,8 @@ def health():
         "version": "6.0.0",
         "provider": "groq",
         "ai_configured": bool(GROQ_API_KEY),
-        "primary_model": PRIMARY_MODEL,
-        "backup_model": BACKUP_MODEL
+        "model": GROQ_MODEL,
+        "environment": APP_ENV
     }
 
 
@@ -419,48 +514,35 @@ def ai_test():
 
     try:
 
-        client = get_groq_client()
-
-        completion = client.chat.completions.create(
-            model=PRIMARY_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Reply with exactly: "
-                        "FHAM AI connection successful."
-                    )
-                }
-            ],
-            temperature=0,
-            max_completion_tokens=50
-        )
-
-        answer = (
-            completion
-            .choices[0]
-            .message
-            .content
+        answer = ai_answer(
+            message="Reply with exactly: FHAM AI is working.",
+            language="en",
+            mode="professional",
+            history=[]
         )
 
         return {
             "ok": True,
-            "provider": "groq",
-            "model": PRIMARY_MODEL,
+            "ai": True,
+            "model": GROQ_MODEL,
             "answer": answer
         }
 
     except Exception as error:
 
+        error_type = classify_error(error)
+
         logger.exception(
-            "Direct AI test failed."
+            "AI TEST FAILED | type=%s | error=%s",
+            error_type,
+            error
         )
 
         return {
             "ok": False,
-            "provider": "groq",
-            "model": PRIMARY_MODEL,
-            "error_type": type(error).__name__,
+            "ai": False,
+            "model": GROQ_MODEL,
+            "error_type": error_type,
             "error": str(error)
         }
 
@@ -624,9 +706,13 @@ def chat(req: ChatRequest):
             reversed(rows)
         )
 
+        # -------------------------------------------------
+        # AI REQUEST
+        # -------------------------------------------------
+
         try:
 
-            answer, used_model = ai_answer(
+            answer = ai_answer(
                 message=req.message,
                 language=req.language,
                 mode=req.mode,
@@ -638,24 +724,27 @@ def chat(req: ChatRequest):
 
         except Exception as error:
 
+            error_type = classify_error(error)
+
             logger.exception(
-                "AI request failed."
+                "CHAT AI FAILED | type=%s | error=%s",
+                error_type,
+                error
             )
 
             fallback = demo_answer(
                 req.message,
                 req.language,
                 req.mode,
-                reason=str(error)
+                reason=f"{error_type}: {error}"
             )
 
             answer = fallback["answer"]
-            used_model = None
             demo = True
-            reason = str(error)
+            reason = f"{error_type}: {error}"
 
         # -------------------------------------------------
-        # Save user message
+        # Save user
         # -------------------------------------------------
 
         connection.execute(
@@ -677,7 +766,7 @@ def chat(req: ChatRequest):
         )
 
         # -------------------------------------------------
-        # Save assistant response
+        # Save assistant
         # -------------------------------------------------
 
         connection.execute(
@@ -705,7 +794,7 @@ def chat(req: ChatRequest):
             "mode": req.mode,
             "demo": demo,
             "provider": "groq",
-            "model": used_model,
+            "model": GROQ_MODEL,
             "error": reason
         }
 
@@ -725,6 +814,7 @@ frontend_directory = os.path.abspath(
         "frontend"
     )
 )
+
 
 if os.path.isdir(frontend_directory):
 
